@@ -7,7 +7,7 @@ from chemical_dynamics import F1, F2, get_mode, dynamics
 
 
 class RungeKutta:
-    def __init__(self, x0: np.array, t0: float, dt: float, t_final: float, epsilon: float = 1e-9):
+    def __init__(self, x0: np.array, t0: float, dt: float, t_final: float, xs: np.array, epsilon: float = 1e-9):
         """
         Initialize the Runge-Kutta integrator for the chemical dynamics system.
 
@@ -16,12 +16,14 @@ class RungeKutta:
             t0 (float): Initial time
             dt (float): Time step
             t_final (float): Final time
+            xs (np.array): spatial grid points for the system (coming from Galerkin method)
             epsilon (float, optional): Small perturbation for switching. Defaults to 1e-9.
         """     
         self.x0 = x0
         self.t0 = t0
         self.dt = dt
         self.t_final = t_final
+        self.xs = xs
         self.epsilon = epsilon
         self.mode = "F2" if x0[1] >= 1 else "F1"
 
@@ -54,34 +56,90 @@ class RungeKutta:
         return u
 
     @staticmethod
-    def phi_prim(R, gamma=20, lambda_=0.5, alpha=0.1, beta=0.04):
-        return gamma/(R0 - lambda_ * R) - alpha * R**(-3) + beta
+    def phi_prim(R_vector: np.array, gamma: float=20, lambda_: float=0.5, alpha: float=0.1, beta: float=0.04) -> np.array:
+        """
+        Compute the derivative of the phi function with respect to R.
+
+        Args:
+            R_vector (np.array): Vector of radii
+            gamma (float, optional): gamma parameter. Defaults to 20.
+            lambda_ (float, optional): lambda parameter. Defaults to 0.5.
+            alpha (float, optional): alpha parameter. Defaults to 0.1.
+            beta (float, optional): beta parameter. Defaults to 0.04.
+
+        Returns:
+            np.array: Derivative of the phi function with respect to R
+        """
+        return gamma/(R0 - lambda_ * R_vector) - alpha * R_vector**(-3) + beta
     
     @staticmethod
     def R_x():
         return 1
     
-    def p_x(self, R):
-        return eta * self.phi_prim(R) * self.R_x()
+    def p_x(self, R_vector: np.array) -> np.array:
+        """
+        Calculates the pressure derivative with respect to x 
+        based on the radius R and eta parameter.
+
+        Args:
+            R_vector (np.array): Vector of radii
+
+        Returns:
+            np.array: Values of p_x
+        """
+        return eta * self.phi_prim(R_vector) * self.R_x()
+
+    def get_shear_stress(self, R_vector: np.array) -> np.array:
+        """
+        Calculate the shear stress based on the radius R and pressure derivative p_x.        
+
+        Args:
+            R_vector (np.array): Vector of radii
+
+        Returns:
+            np.array: Shear stress values
+        """
+        return (R_vector * self.p_x(R_vector))/(2 * L)
 
     @staticmethod
-    def get_shear_stress(R: float) -> float:
-        return (R)/(2 * L)
-
-    @staticmethod
-    def get_alpha():
+    def get_alpha() -> float:
+        """
+        Calculates the value of alpha parameter.
+        Returns:
+            float: Alpha value
+        """
         return k_Ca_minus/k_NO_minus
     
     @staticmethod
-    def get_beta(R: float):
+    def get_beta(R: float) -> float:
+        """
+        Calculates the value of beta parameter based on the averaged radius R.
+        Returns:
+            float: Beta value
+        """
         return (k_Ca_plus * (R/R_crit)**11)/(k_NO_minus * C_shear)
     
     @staticmethod
-    def get_gamma():
+    def get_gamma() -> float:
+        """
+        Calculates the value of gamma parameter.
+
+        Returns:
+            float: Gamma value
+        """
         return (10 * k_Ca_plus)/(k_NO_minus * C_shear)
     
     @staticmethod
-    def get_zeta(tau: float):
+    def get_zeta(tau: float) -> float:
+        """
+        Calculates the value of zeta parameter based on the averagedshear stress tau.
+
+        Args:
+            tau (float): averaged shear stress
+
+        Returns:
+            float: Zeta value
+        """
         return (k_NO_plus * m * tau/tau_ref)/(k_NO_minus)
 
     def single_step(self, t: float, x: np.array) -> np.array:
@@ -233,7 +291,8 @@ if __name__ == "__main__":
     t0 = 0.0
     dt = 0.01
     t_final = 100.0
+    xs = np.linspace(0, 1, 100)
 
-    rk = RungeKutta(x0, t0, dt, t_final)
+    rk = RungeKutta(x0, t0, dt, t_final, xs)
     rk.plot_solution()
         
