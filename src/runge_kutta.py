@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 
+from config import *
 from chemical_dynamics import F1, F2, get_mode, dynamics
 
 
@@ -23,6 +24,106 @@ class RungeKutta:
         self.t_final = t_final
         self.epsilon = epsilon
         self.mode = "F2" if x0[1] >= 1 else "F1"
+
+    @staticmethod
+    def u_to_r(u: np.array) -> np.array:
+        """
+        Convert the state vector u to the corresponding r vector.
+
+        Args:
+            u (np.array): State vector
+
+        Returns:
+            np.array: Corresponding r vector
+        """
+        r = np.sqrt(2*u)
+        return r
+    
+    @staticmethod
+    def r_to_u(r: np.array) -> np.array:
+        """
+        Convert the r vector to the corresponding state vector u.
+
+        Args:
+            r (np.array): r vector
+
+        Returns:
+            np.array: Corresponding state vector u
+        """
+        u = 0.5 * r**2
+        return u
+
+    @staticmethod
+    def phi_prim(R, gamma=20, lambda_=0.5, alpha=0.1, beta=0.04):
+        return gamma/(R0 - lambda_ * R) - alpha * R**(-3) + beta
+    
+    @staticmethod
+    def R_x():
+        return 1
+    
+    def p_x(self, R):
+        return eta * self.phi_prim(R) * self.R_x()
+
+    @staticmethod
+    def get_shear_stress(R: float) -> float:
+        return (R)/(2 * L)
+
+    @staticmethod
+    def get_alpha():
+        return k_Ca_minus/k_NO_minus
+    
+    @staticmethod
+    def get_beta(R: float):
+        return (k_Ca_plus * (R/R_crit)**11)/(k_NO_minus * C_shear)
+    
+    @staticmethod
+    def get_gamma():
+        return (10 * k_Ca_plus)/(k_NO_minus * C_shear)
+    
+    @staticmethod
+    def get_zeta(tau: float):
+        return (k_NO_plus * m * tau/tau_ref)/(k_NO_minus)
+
+    def single_step(self, t: float, x: np.array) -> np.array:
+        """
+        Performs a single Runge-Kutta step for the current mode.
+        If the state crosses the switching surface, it switches to the other mode.
+        Utilizes event detection and solve_ivp to handle the switching.
+
+        Args:
+            t (float): Current time
+            x (np.array): Current state vector
+
+        Returns:
+            np.array: New state vector after the time step
+        """
+        def event_surface(t, x):
+            return x[1] - 1.0
+        
+        event_surface.terminal = True
+        event_surface.direction = 0
+
+        sol = solve_ivp(
+            lambda t, x: dynamics(t, x, self.mode),
+            (t, t + self.dt),
+            x,
+            events=event_surface,
+            max_step=self.dt,
+            rtol=1e-6,
+            atol=1e-9
+        )
+
+        if sol.status == 1:
+            # boundary event occurred, switch mode
+            self.mode = "F2" if self.mode == "F1" else "F1"
+
+            # small push to avoid re-triggering event
+            if self.mode == "F1":
+                sol.y[1, -1] = 1.0 - self.epsilon
+            else:
+                sol.y[1, -1] = 1.0 + self.epsilon
+
+        return sol.y[:, -1]
 
     def integrate(self) -> tuple[np.ndarray, np.ndarray]:
         """
