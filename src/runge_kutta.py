@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 
 from config import *
-from chemical_dynamics import F1, F2, get_mode, dynamics
+from chemical_dynamics import F1, F2, dynamics
 
 
 class RungeKutta:
@@ -54,6 +54,19 @@ class RungeKutta:
         """
         u = 0.5 * r**2
         return u
+    
+    def mean_value_in_x(self, vector: np.array) -> float:
+        """
+        Calculate the mean value of a given vector.
+
+        Args:
+            vector (np.array): Input vector
+
+        Returns:
+            float: Mean value of the vector
+        """
+        interval_length = self.xs[-1] - self.xs[0]
+        return 1/interval_length * np.trapz(vector, self.xs)
 
     @staticmethod
     def phi_prim(R_vector: np.array, gamma: float=20, lambda_: float=0.5, alpha: float=0.1, beta: float=0.04) -> np.array:
@@ -72,9 +85,17 @@ class RungeKutta:
         """
         return gamma/(R0 - lambda_ * R_vector) - alpha * R_vector**(-3) + beta
     
-    @staticmethod
-    def R_x():
-        return 1
+    def R_x(self, R_vector: np.array) -> np.array:
+        """
+        Calculate the derivative of R with respect to x using numpy's gradient function.
+
+        Args:
+            R_vector (np.array): Vector of radii
+
+        Returns:
+            np.array: Derivative of R with respect to x
+        """
+        return np.gradient(R_vector, self.xs, edge_order=2)
     
     def p_x(self, R_vector: np.array) -> np.array:
         """
@@ -87,7 +108,7 @@ class RungeKutta:
         Returns:
             np.array: Values of p_x
         """
-        return eta * self.phi_prim(R_vector) * self.R_x()
+        return self.eta * np.multiply(self.phi_prim(R_vector), self.R_x(R_vector))
 
     def get_shear_stress(self, R_vector: np.array) -> np.array:
         """
@@ -99,7 +120,7 @@ class RungeKutta:
         Returns:
             np.array: Shear stress values
         """
-        return (R_vector * self.p_x(R_vector))/(2 * L)
+        return np.multiply(R_vector, self.p_x(R_vector))/(2 * L)
 
     @staticmethod
     def get_alpha() -> float:
@@ -142,7 +163,7 @@ class RungeKutta:
         """
         return (k_NO_plus * m * tau/tau_ref)/(k_NO_minus)
 
-    def single_step(self, t: float, x: np.array) -> np.array:
+    def single_step(self, t: float, NC_s: np.array, R_vector: np.array) -> np.array:
         """
         Performs a single Runge-Kutta step for the current mode.
         If the state crosses the switching surface, it switches to the other mode.
@@ -150,21 +171,28 @@ class RungeKutta:
 
         Args:
             t (float): Current time
-            x (np.array): Current state vector
+            NC_s (np.array): Current state vector
+            R_vector (np.array): Vector of radii
 
         Returns:
             np.array: New state vector after the time step
         """
-        def event_surface(t, x):
-            return x[1] - 1.0
+        alpha = self.get_alpha()
+        beta = self.get_beta(self.mean_value_in_x(R_vector))
+        gamma = self.get_gamma()
+        zeta = self.get_zeta(self.mean_value_in_x(self.get_shear_stress(R_vector)))
+
+
+        def event_surface(t, NC_s):
+            return NC_s[1] - 1.0
         
         event_surface.terminal = True
         event_surface.direction = 0
 
         sol = solve_ivp(
-            lambda t, x: dynamics(t, x, self.mode),
+            lambda t, x: dynamics(t, x, self.mode, alpha, beta, gamma, zeta),
             (t, t + self.dt),
-            x,
+            NC_s,
             events=event_surface,
             max_step=self.dt,
             rtol=1e-6,
@@ -182,65 +210,11 @@ class RungeKutta:
                 sol.y[1, -1] = 1.0 + self.epsilon
 
         return sol.y[:, -1]
-
-    def integrate(self) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Integrate the system using the Runge-Kutta method with event detection for switching.
-
-        Returns:
-            tuple[np.ndarray, np.ndarray]: Time points and state vectors.
-        """
-        mode = get_mode(self.x0)
-        t = self.t0
-        x = self.x0.copy()
-
-        def event_surface(t, x):
-            return x[1] - 1.0
-        
-        event_surface.terminal = True
-        event_surface.direction = 0
-
-        T = [self.t0]
-        X = [self.x0.copy()]
-
-        while t < self.t_final:
-            sol = solve_ivp(
-                lambda t, x: dynamics(t, x, mode),
-                (t, self.t_final),
-                x,
-                events=event_surface,
-                max_step=0.1,
-                rtol=1e-6,
-                atol=1e-9
-            )
-
-            # store trajectory
-            T.extend(sol.t[1:])
-            X.extend(sol.y.T[1:])
-
-            t = sol.t[-1]
-            x = sol.y[:, -1]
-
-            if sol.status == 1:
-                # boundary event occurred, switch mode
-                mode = "F2" if mode == "F1" else "F1"
-
-                # small push to avoid re-triggering event
-                if mode == "F1":
-                    x[1] = 1.0 - self.epsilon
-                else:
-                    x[1] = 1.0 + self.epsilon
-
-            else:
-                break
-
-        return np.array(T), np.array(X)
     
-    def plot_solution(self) -> None:
+    def plot_solution(self, t: np.array, x: np.array) -> None:
         """
         Plot the solution trajectory along with the vector field and switching surface.
         """
-        t, x = self.integrate()
         
         fig, ax = plt.subplots(figsize=(10, 8))
         
