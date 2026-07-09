@@ -6,13 +6,14 @@ from config import *
 
 
 class Galerkin:
-    def __init__(self, x0: np.array, N: float, t0: float, dt: float, t_final: float, 
+    def __init__(self, x0: np.array, xs: np.array, N: float, t0: float, dt: float, t_final: float, 
                  v: Callable, R_minus: float = 0.1, R_plus: float = 2.0):
          """
          Initialize the Galerkin method for the chemical dynamics system.
 
          Args:
              x0 (np.array): Initial state vector
+             xs (np.array): Spatial grid points
              N (float): Number of spatial grid points
              t0 (float): Initial time
              dt (float): Time step
@@ -20,8 +21,9 @@ class Galerkin:
              v (Callable): initial condition function
          """
          self.x0 = x0
+         self.xs = xs
          self.N = N # number of spatial grid points
-         self.h = 1.0 / (N - 1)
+         self.h = (xs[-1] - xs[0]) / (N - 1)
          self.t0 = t0
          self.dt = dt
          self.t_final = t_final
@@ -86,6 +88,20 @@ class Galerkin:
         R_0 = self.R_minus + (self.R_plus - self.R_minus) * (1 - self.smooth_heaviside(NC_s[1], C_shear))
         R_1 = self.R_minus + (self.R_plus - self.R_minus) * (1 - self.smooth_heaviside(NC_s[1], C_shear))
         return (R_0, R_1)
+
+    def get_lifting_function_values(self, NC_s: np.array) -> np.array:
+        """
+        Calculate the lifting function based on the current state vector NC_s.
+
+        Args:
+            NC_s (np.array): Current state vector
+
+        Returns:
+            np.array: Lifting function
+        """
+        R_0, R_1 = self.boundary_conditions(NC_s)
+        lifting_function = R_0 + self.xs/(self.xs[-1] - self.xs[0]) * (R_1 - R_0)
+        return lifting_function
     
     def extrapolate_nonlinearity(self, n: int, R_history: np.ndarray) -> np.array:
         """
