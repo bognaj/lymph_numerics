@@ -147,3 +147,51 @@ class Galerkin:
         y[right] = ((xi + self.h) - x[right]) / self.h
 
         return y
+    
+    def scalar_product(self, i: int, j: int, h: float) -> float:
+        """
+        Compute the scalar product of the i-th and j-th basis functions over the domain.
+
+        Args:
+            i (int): Index of the first basis function
+            j (int): Index of the second basis function
+            h (float): Grid spacing
+        
+        Returns:
+            float: Scalar product of the i-th and j-th basis functions
+        """
+        if i == j:
+            return 2 * h / 3
+        elif abs(i - j) == 1:
+            return h / 6
+        else:
+            return 0.0
+        
+    def mass_matrix(self) -> np.array:
+        """
+        Construct the mass matrix for the Galerkin method.
+
+        Returns:
+            np.array: Mass matrix
+        """
+        M = np.zeros((self.N, self.N))
+        for i in range(self.N):
+            for j in range(self.N):
+                M[i, j] = self.scalar_product(i, j, self.h)
+        return M
+    
+    def stiffness_matrix(self) -> np.array:
+        """
+        Construct the stiffness matrix for the Galerkin method.
+
+        Returns:
+            np.array: Stiffness matrix
+        """
+        K = np.zeros((self.N, self.N))
+        for i in range(self.N):
+            for j in range(self.N):
+                if abs(i - j) == 1:
+                    K[i, j] = -1 / self.h
+                elif i == j:
+                    K[i, j] = 2 / self.h
+        return K
