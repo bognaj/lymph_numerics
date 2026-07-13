@@ -31,6 +31,7 @@ class Galerkin:
          self.R_minus = R_minus
          self.R_plus = R_plus
          self.n = 0 # count time steps
+         self.coeffs_history = np.zeros((int((t_final - t0) / dt) + 1, N))
     
     @staticmethod
     def u_to_r(u: np.array) -> np.array:
@@ -103,24 +104,34 @@ class Galerkin:
         lifting_function = R_0 + self.xs/(self.xs[-1] - self.xs[0]) * (R_1 - R_0)
         return lifting_function
     
-    def extrapolate_nonlinearity(self, n: int, R_history: np.ndarray) -> np.array:
+    def nonlinearity_a(self, alpha: np.array) -> np.array:
         """
-        Extrapolate the nonlinear term based on the history of boundary conditions.
+        Define the nonlinearity function a(u) = u^2.
+
+        Returns:
+            Callable: Nonlinearity function
+        """
+        # TODO: Implement the nonlinearity function a(u) in the correct form
+        return np.power(alpha, 2)
+    
+    def extrapolate_u(self, n: int, u_history: np.ndarray) -> np.array:
+        """
+        Extrapolate the state vector based on its history.
 
         Args:
             n (int): Current time step
-            R_history (np.ndarray): History of boundary conditions
+            u_history (np.ndarray): History of state vectors
 
         Returns:
-            np.array: Extrapolated nonlinear term
+            np.array: Extrapolated state vector
         """
         if n >= 2:
-            return 1.5 * R_history[n-1, :] - 0.5 * R_history[n-2, :]
+            return 1.5 * u_history[n-1, :] - 0.5 * u_history[n-2, :]
         elif n == 1:
             # TODO
-            return R_history[n-1, :]
+            return u_history[n-1, :]
         elif n == 0:
-            return R_history[n, :]
+            return u_history[n, :]
 
     def basis_function_i(self, i, x) -> float:
         """
@@ -177,21 +188,79 @@ class Galerkin:
         M = np.zeros((self.N, self.N))
         for i in range(self.N):
             for j in range(self.N):
-                M[i, j] = self.scalar_product(i, j, self.h)
+                if i == j:
+                    if i == 0 or i == self.N-1:
+                        M[i,j] = self.h/3
+                    else:
+                        M[i,j] = 2*self.h/3
+                elif abs(i-j) == 1:
+                    M[i,j] = self.h/6
+                else:
+                    M[i,j] = 0
         return M
     
-    def stiffness_matrix(self) -> np.array:
+    def stiffness_matrix(self, n: int, alpha_history: np.ndarray) -> np.array:
         """
         Construct the stiffness matrix for the Galerkin method.
+
+        Args:
+            n (int): Current time step
+            alpha_history (np.ndarray): History of coefficients multiplying basis functions
 
         Returns:
             np.array: Stiffness matrix
         """
         K = np.zeros((self.N, self.N))
+        extrapolated_alpha = self.extrapolate_u(n, alpha_history)
+        linearization = self.nonlinearity_a(extrapolated_alpha)
+
         for i in range(self.N):
             for j in range(self.N):
-                if abs(i - j) == 1:
-                    K[i, j] = -1 / self.h
-                elif i == j:
-                    K[i, j] = 2 / self.h
+                if i == j:
+                    if i == 0 or i == self.N-1:
+                        K[i,j] = 1/self.h
+                    else:
+                        K[i,j] = 2/self.h
+                elif abs(i-j) == 1:
+                    K[i,j] = -1/self.h
+                else:
+                    K[i,j] = 0
         return K
+    
+    def crank_nicolson_galerkin_step(self, n: int, alpha_history: np.ndarray) -> np.ndarray:
+        """
+        Perform a single Crank-Nicolson step for the Galerkin method.
+
+        Args:
+            n (int): Current time step
+            alpha_history (np.ndarray): History of coefficients multiplying basis functions
+
+        Returns:
+            np.ndarray: Updated state vector
+        """
+        M = self.mass_matrix()
+        K = self.stiffness_matrix(n, alpha_history)
+
+        A = M + (self.dt/2)*K
+        B = M - (self.dt/2)*K
+
+        rhs = B @ alpha_history[-1, :]
+
+        alpha_new = np.linalg.solve(A, rhs)
+
+        return alpha_new
+    
+    def get_u_from_alpha_coeffs(self, alpha_coeffs: np.ndarray) -> np.ndarray:
+        """
+        Reconstruct the state vector u from the coefficients of the basis functions.
+
+        Args:
+            alpha_coeffs (np.ndarray): Coefficients of the basis functions
+        
+        Returns:
+            np.ndarray: Reconstructed state vector u
+        """
+        u = np.zeros_like(self.xs)
+        for i in range(self.N):
+            u += alpha_coeffs[i] * self.basis_function_i(i, self.xs)
+        return u
