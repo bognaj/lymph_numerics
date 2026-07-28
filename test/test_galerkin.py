@@ -22,7 +22,7 @@ class TestGalerkinExtrapolation(unittest.TestCase):
             t0=0.0,
             dt=0.01,
             t_final=1.0,
-            v=v,
+            initial_condition=v,
         )
 
         first_state = 0.05 + 0.01 * np.arange(galerkin.num_dofs, dtype=float)
@@ -48,7 +48,7 @@ class TestGalerkinExtrapolation(unittest.TestCase):
             t0=0.0,
             dt=0.01,
             t_final=1.0,
-            v=v,
+            initial_condition=v,
         )
         galerkin.n = 2
 

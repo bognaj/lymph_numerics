@@ -25,6 +25,7 @@ class RungeKutta:
         self.t_final = t_final
         self.xs = xs
         self.epsilon = epsilon
+        self.eta = eta
         self.mode = "F2" if x0[1] >= 1 else "F1"
 
     @staticmethod
@@ -66,7 +67,7 @@ class RungeKutta:
             float: Mean value of the vector
         """
         interval_length = self.xs[-1] - self.xs[0]
-        return 1/interval_length * np.trapz(vector, self.xs)
+        return 1/interval_length * np.trapezoid(vector, self.xs)
 
     @staticmethod
     def phi_prim(R_vector: np.array, gamma: float=20, lambda_: float=0.5, alpha: float=0.1, beta: float=0.04) -> np.array:

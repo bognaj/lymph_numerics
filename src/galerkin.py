@@ -7,7 +7,7 @@ from config import *
 
 class Galerkin:
     def __init__(self,  xs: np.array, N: float, t0: float, dt: float, t_final: float, 
-                 v: Callable):
+                 initial_condition: Callable):
          """
          Initialize the Galerkin method for the chemical dynamics system.
 
@@ -17,7 +17,8 @@ class Galerkin:
              t0 (float): Initial time
              dt (float): Time step
              t_final (float): Final time
-             v (Callable): initial condition function
+             initial_condition (Callable): initial condition u(., 0) = w as a
+                 function of x, returning nodal values of u
          """
          self.xs = xs
          self.N = N # number of spatial grid points
@@ -26,11 +27,7 @@ class Galerkin:
          self.t0 = t0
          self.dt = dt
          self.t_final = t_final
-         self.v = v
-         self.R_initial_0 = v(0)
-         self.R_initial_1 = v(1)
-         self.u_initial_0 = 0.5 * np.power(self.R_initial_0, 2)
-         self.u_initial_1 = 0.5 * np.power(self.R_initial_1, 2)
+         self.initial_condition = initial_condition
          self.R_minus = 0.05
          self.u_minus = 0.5 * np.power(self.R_minus, 2)
          self.R_plus = 1
@@ -80,7 +77,7 @@ class Galerkin:
         Returns:
             float: Value of the smooth Heaviside function at x
         """
-        return 1 / (1 + np.exp(-2*k * (x - x_ref)))
+        return 1 / (1 + np.exp(-k * (x - x_ref)))
     
     def boundary_conditions(self, C_values: np.array) -> tuple:
         """
@@ -92,9 +89,9 @@ class Galerkin:
         Returns:
             tuple: _description_
         """
-        u_0 = self.u_minus + (self.u_plus - self.u_minus) * (1 - self.smooth_heaviside(C_values[self.n], C_shear))
-        u_1 = self.u_minus + (self.u_plus - self.u_minus) * (1 - self.smooth_heaviside(C_values[self.n], C_shear))
-        return (u_0, u_1)
+        H = 1 - self.smooth_heaviside(C_values[self.n], C_shear)
+        u_b = (np.sqrt(self.u_minus) + np.sqrt(self.u_plus - self.u_minus) * H) ** 2
+        return (u_b, u_b)
 
     def get_lifting_function_values(self, u_0: float, u_1: float) -> np.array:
         """
@@ -109,7 +106,25 @@ class Galerkin:
         """
         lifting_function = u_0 + self.xs/(self.xs[-1] - self.xs[0]) * (u_1 - u_0)
         return lifting_function
-    
+
+    def _full_nodes_from_alpha(self, alpha: np.ndarray, lifting: np.ndarray) -> np.ndarray:
+        """
+        Reconstruct full nodal solution u = U + v at all N nodes.
+
+        The lifting function U satisfies the boundary conditions; the interior
+        DOF coefficients alpha represent v = u - U (zero Dirichlet BCs).
+
+        Args:
+            alpha (np.ndarray): Interior DOF coefficients (length N-2)
+            lifting (np.ndarray): Lifting function values at all nodes (length N)
+
+        Returns:
+            np.ndarray: Full solution values u = U + v at all nodes (length N)
+        """
+        u_full = lifting.copy()
+        u_full[1:-1] += alpha
+        return u_full
+
     @staticmethod
     def phi_prim(u_vector: np.array, gamma: float=20, lambda_: float=0.5, alpha: float=0.1, beta: float=0.04) -> np.array:
         """
@@ -218,7 +233,7 @@ class Galerkin:
                     M[i,j] = 0
         return M
     
-    def stiffness_matrix(self, u_star: np.ndarray) -> np.ndarray:
+    def stiffness_matrix(self, u_full_nodes: np.ndarray) -> np.ndarray:
         """
         Assemble nonlinear stiffness matrix.
 
@@ -227,9 +242,9 @@ class Galerkin:
 
         Parameters
         ----------
-        u_star : np.ndarray
-            Extrapolated interior solution.
-            Length = N-2
+        u_full_nodes : np.ndarray
+            Full solution U + v at all N nodes (including boundaries).
+            Length = N
 
         Returns
         -------
@@ -246,15 +261,9 @@ class Galerkin:
             node_left = e
             node_right = e + 1
 
-            if node_left == 0:
-                u_left = 0.0
-            else:
-                u_left = u_star[node_left - 1]
-
-            if node_right == self.N - 1:
-                u_right = 0.0
-            else:
-                u_right = u_star[node_right - 1]
+            # Full solution values at element nodes (lifting + interior DOFs)
+            u_left = u_full_nodes[node_left]
+            u_right = u_full_nodes[node_right]
 
             # Element midpoint value
             u_mid = 0.5 * (u_left + u_right)
@@ -292,101 +301,159 @@ class Galerkin:
                         K_local[i_local, j_local]
                     )
         return K
-    
-    def first_step(self, u_history: np.ndarray) -> np.ndarray:
+
+    def _lifting_stiffness_vector(self, u_full_nodes: np.ndarray,
+                                  u_bar_nodes: np.ndarray) -> np.ndarray:
+        """
+        Interior-row action of the nonlinear stiffness operator on the lifting
+        function: (K_full @ U_bar) restricted to interior nodes.
+
+        This assembles the term int a(U+v) U_x phi_j' dx that appears on the
+        right-hand side of the lifted weak form
+            int v_t phi_j + int a(U+v) v_x phi_j'
+                = -int U_t phi_j - int a(U+v) U_x phi_j'.
+        It vanishes for symmetric boundary conditions (U constant in x, so
+        U_x = 0) but is required whenever u_B^- != u_B^+.
+
+        Args:
+            u_full_nodes (np.ndarray): Full solution U + v used to freeze the
+                nonlinear coefficient a, values at all N nodes.
+            u_bar_nodes (np.ndarray): Lifting function values (all N nodes) to
+                which the stiffness operator is applied.
+
+        Returns:
+            np.ndarray: Interior-row stiffness action, length num_dofs.
+        """
+        result = np.zeros(self.num_dofs)
+        for e in range(self.N - 1):
+            node_left = e
+            node_right = e + 1
+
+            u_mid = 0.5 * (u_full_nodes[node_left] + u_full_nodes[node_right])
+            a_e = self.nonlinearity_a(u_mid, eta)
+
+            # Local stiffness (a_e/h) * [[1, -1], [-1, 1]] applied to the local
+            # lifting values [U_left, U_right].
+            local = (a_e / self.h) * np.array([
+                u_bar_nodes[node_left] - u_bar_nodes[node_right],
+                u_bar_nodes[node_right] - u_bar_nodes[node_left],
+            ])
+
+            for i_local, i_node in enumerate([node_left, node_right]):
+                if i_node == 0 or i_node == self.N - 1:
+                    continue
+                result[i_node - 1] += local[i_local]
+        return result
+
+    def first_step(self, u_history: np.ndarray, lifting_prev: np.ndarray, lifting_next: np.ndarray) -> np.ndarray:
         """
         Compute the first time step using the predictor-corrector
         procedure described by equations (13.26)-(13.27).
         Predictor:
-            U1,0 from U0
+            alpha_1,0 from alpha_0
         Corrector:
-            U1 using midpoint (U1,0 + U0)/2
+            alpha_1 using midpoint (alpha_1,0 + alpha_0)/2
 
         Parameters
         ----------
         u_history : np.ndarray
-            History array containing U0.
+            History array containing alpha coefficients at t=0.
+        lifting_prev : np.ndarray
+            Lifting function U at t=0, values at all N nodes.
+        lifting_next : np.ndarray
+            Lifting function U at t=dt, values at all N nodes.
 
         Returns
         -------
-        U1 : np.ndarray
-            First time step solution.
+        alpha_1 : np.ndarray
+            First time step interior DOF coefficients.
         """
-        U0 = u_history[0, :]
-        # -----------------------------
-        # Step 1: predictor U1,0
-        # -----------------------------
-        K0 = self.stiffness_matrix(
-            U0
-        )
+        alpha_0 = u_history[0, :]
         M = self.mass_matrix()
-        A0 = (
-            M
-            +
-            (self.dt/2)*K0
-        )
-        B0 = (
-            M
-            -
-            (self.dt/2)*K0
-        )
-        rhs0 = B0 @ U0
 
-        U10 = np.linalg.solve(
-            A0,
-            rhs0
-        )
+        # Lifting function averaged over the step, used for the U_x forcing.
+        u_bar = 0.5 * (lifting_prev + lifting_next)
+
+        # Forcing from -U_t: exact integral of -U_t against hat basis phi_j is
+        # -h * U_t(x_j). Approximating U_t via backward difference gives
+        # -h*(U^1 - U^0)/dt per node. The dt factor cancels with the
+        # Crank-Nicolson dt multiplication, leaving:
+        f_ut = -self.h * (lifting_next[1:-1] - lifting_prev[1:-1])
+
+        # -----------------------------
+        # Step 1: predictor alpha_1,0
+        # -----------------------------
+        u_full_0 = self._full_nodes_from_alpha(alpha_0, lifting_prev)
+        K0 = self.stiffness_matrix(u_full_0)
+        A0 = M + (self.dt/2)*K0
+        B0 = M - (self.dt/2)*K0
+        # Add the lifting-gradient forcing -dt * (K_full @ U_bar); nonzero only
+        # when the boundary conditions are asymmetric (U_x != 0).
+        f0 = f_ut - self.dt * self._lifting_stiffness_vector(u_full_0, u_bar)
+        rhs0 = B0 @ alpha_0 + f0
+
+        alpha_10 = np.linalg.solve(A0, rhs0)
 
         # -----------------------------
         # Step 2: corrector
         # -----------------------------
-        U_mid = 0.5*(U10 + U0)
+        alpha_mid = 0.5*(alpha_10 + alpha_0)
+        lifting_mid = 0.5*(lifting_prev + lifting_next)
+        u_full_mid = self._full_nodes_from_alpha(alpha_mid, lifting_mid)
 
-        K1 = self.stiffness_matrix(
-            U_mid
-        )
+        K1 = self.stiffness_matrix(u_full_mid)
+        A1 = M + (self.dt/2)*K1
+        B1 = M - (self.dt/2)*K1
+        f1 = f_ut - self.dt * self._lifting_stiffness_vector(u_full_mid, u_bar)
+        rhs1 = B1 @ alpha_0 + f1
 
-        A1 = (
-            M + (self.dt/2)*K1
-        )
+        alpha_1 = np.linalg.solve(A1, rhs1)
 
-        B1 = (
-            M - (self.dt/2)*K1
-        )
-        rhs1 = B1 @ U0
-
-        U1 = np.linalg.solve(
-            A1,
-            rhs1
-        )
-
-        return U1
+        return alpha_1
     
-    def crank_nicolson_galerkin_step(self, n: int, u_history: np.ndarray) -> np.ndarray:
+    def crank_nicolson_galerkin_step(self, n: int, u_history: np.ndarray,
+                                      lifting_prev: np.ndarray, lifting_next: np.ndarray) -> np.ndarray:
         """
         Perform a single Crank-Nicolson step for the Galerkin method.
 
+        The equation solved is v_t - (a(U+v)(U+v)_x)_x = -U_t, where U is the
+        lifting function and v = u - U satisfies zero Dirichlet boundary conditions.
+
         Args:
-            n (int): Current time step
-            u_history (np.ndarray): History of u
+            n (int): Current time step index (1-indexed; step being computed)
+            u_history (np.ndarray): Interior alpha coefficients at steps 0..n-1,
+                                    shape (n, num_dofs)
+            lifting_prev (np.ndarray): Lifting function U at step n-1, all N nodes
+            lifting_next (np.ndarray): Lifting function U at step n, all N nodes
 
         Returns:
-            np.ndarray: Updated state vector
+            np.ndarray: Interior alpha coefficients at step n
         """
         if n == 1:
-            return self.first_step(
-                u_history
-            )
-        
-        u_star = self.extrapolate_u(u_history)
+            return self.first_step(u_history, lifting_prev, lifting_next)
+
+        # Extrapolate alpha to predict the new step (Adams-Bashforth)
+        alpha_star = self.extrapolate_u(u_history)
+        # Evaluate nonlinearity at full solution U + v*
+        u_full_star = self._full_nodes_from_alpha(alpha_star, lifting_next)
 
         M = self.mass_matrix()
-        K = self.stiffness_matrix(u_star)
+        K = self.stiffness_matrix(u_full_star)
 
         A = M + (self.dt/2)*K
         B = M - (self.dt/2)*K
 
-        rhs = B @ u_history[-1, :]
+        # Forcing from -U_t: -h * (U^n - U^{n-1}) at interior nodes
+        # (integral of -U_t against the hat basis).
+        f = -self.h * (lifting_next[1:-1] - lifting_prev[1:-1])
+
+        # Lifting-gradient forcing -dt * (K_full @ U_bar), i.e. the contribution
+        # of int a(U+v) U_x phi_j'. Vanishes for symmetric BCs (U_x = 0) but is
+        # required when u_B^- != u_B^+.
+        u_bar = 0.5 * (lifting_prev + lifting_next)
+        f = f - self.dt * self._lifting_stiffness_vector(u_full_star, u_bar)
+
+        rhs = B @ u_history[-1, :] + f
 
         alpha_new = np.linalg.solve(A, rhs)
 
