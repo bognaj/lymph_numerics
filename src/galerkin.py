@@ -7,7 +7,7 @@ from config import *
 
 class Galerkin:
     def __init__(self,  xs: np.array, N: float, t0: float, dt: float, t_final: float, 
-                 initial_condition: Callable):
+                 initial_condition: Callable, R_minus: float = 0.0, R_plus: float = 1.0):
          """
          Initialize the Galerkin method for the chemical dynamics system.
 
@@ -19,6 +19,11 @@ class Galerkin:
              t_final (float): Final time
              initial_condition (Callable): initial condition u(., 0) = w as a
                  function of x, returning nodal values of u
+             R_minus (float): Boundary radius in the fully contracted state
+                 (chemical drive H = 0). Defaults to 0.0.
+             R_plus (float): Boundary radius in the fully open state
+                 (chemical drive H = 1). Defaults to 1.0, so the boundary
+                 radius R_b can sweep the full range [0, 1].
          """
          self.xs = xs
          self.N = N # number of spatial grid points
@@ -28,10 +33,12 @@ class Galerkin:
          self.dt = dt
          self.t_final = t_final
          self.initial_condition = initial_condition
-         self.R_minus = 0.05
-         self.u_minus = 0.5 * np.power(self.R_minus, 2)
-         self.R_plus = 1
-         self.u_plus = 0.5 * np.power(self.R_plus, 2)
+         # Boundary radius range. As the chemical drive H goes 0 -> 1 the
+         # boundary radius R_b sweeps linearly from R_minus (contracted) to
+         # R_plus (open); the solved state is u = R^2 / 2. Defaults span the
+         # full admissible range R_b in [0, 1].
+         self.R_minus = R_minus
+         self.R_plus = R_plus
          self.n = 0 # count time steps
          self.alpha_history = np.zeros((int((t_final - t0) / dt) + 1, 
                                         self.num_dofs))
@@ -90,7 +97,10 @@ class Galerkin:
             tuple: _description_
         """
         H = 1 - self.smooth_heaviside(C_values[self.n], C_shear)
-        u_b = (np.sqrt(self.u_minus) + np.sqrt(self.u_plus - self.u_minus) * H) ** 2
+        # Linear sweep of the boundary radius R_b in [R_minus, R_plus] as the
+        # chemical drive H in [0, 1]. The solved/stored state is u = R^2 / 2.
+        R_b = self.R_minus + (self.R_plus - self.R_minus) * H
+        u_b = 0.5 * R_b ** 2
         return (u_b, u_b)
 
     def get_lifting_function_values(self, u_0: float, u_1: float) -> np.array:
@@ -126,7 +136,7 @@ class Galerkin:
         return u_full
 
     @staticmethod
-    def phi_prim(u_vector: np.array, gamma: float=20, lambda_: float=0.5, alpha: float=0.1, beta: float=0.04) -> np.array:
+    def phi_prim(u_vector: np.array, gamma: float=20, lambda_: float=0.2, alpha: float=0.1, beta: float=0.04) -> np.array:
         """
         Compute the derivative of the phi function with respect to R.
 
@@ -140,7 +150,7 @@ class Galerkin:
         Returns:
             np.array: Derivative of the phi function with respect to u
         """
-        return gamma/(R0 - lambda_ * u_vector) - alpha * u_vector**(-3) + beta
+        return gamma/(1 - lambda_ * u_vector) - alpha * u_vector**(-3) + beta
     
     def nonlinearity_a(self, u_vector: np.array, eta: float) -> np.array:
         """
@@ -412,7 +422,9 @@ class Galerkin:
         return alpha_1
     
     def crank_nicolson_galerkin_step(self, n: int, u_history: np.ndarray,
-                                      lifting_prev: np.ndarray, lifting_next: np.ndarray) -> np.ndarray:
+                                      lifting_prev: np.ndarray,
+                                      lifting_next: np.ndarray,
+                                      lifting_before_prev: np.ndarray | None = None) -> np.ndarray:
         """
         Perform a single Crank-Nicolson step for the Galerkin method.
 
@@ -425,6 +437,9 @@ class Galerkin:
                                     shape (n, num_dofs)
             lifting_prev (np.ndarray): Lifting function U at step n-1, all N nodes
             lifting_next (np.ndarray): Lifting function U at step n, all N nodes
+            lifting_before_prev (np.ndarray | None): Lifting function U at step
+                n-2, all N nodes. Required for n >= 2 so the nonlinear
+                coefficient can be frozen at the fully extrapolated state.
 
         Returns:
             np.ndarray: Interior alpha coefficients at step n
@@ -432,10 +447,20 @@ class Galerkin:
         if n == 1:
             return self.first_step(u_history, lifting_prev, lifting_next)
 
+        if lifting_before_prev is None:
+            raise ValueError(
+                "lifting_before_prev is required for n >= 2 to extrapolate "
+                "the lifting in the nonlinear coefficient."
+            )
+
         # Extrapolate alpha to predict the new step (Adams-Bashforth)
         alpha_star = self.extrapolate_u(u_history)
-        # Evaluate nonlinearity at full solution U + v*
-        u_full_star = self._full_nodes_from_alpha(alpha_star, lifting_next)
+        # Freeze the nonlinear coefficient a(.) at the fully extrapolated state,
+        # matching the linearized Crank-Nicolson rule: use the Adams-Bashforth
+        # extrapolation for both the interior part v* and the lifting U*.
+        lifting_star = 1.5 * lifting_prev - 0.5 * lifting_before_prev
+        u_bar = 0.5 * (lifting_prev + lifting_next)
+        u_full_star = self._full_nodes_from_alpha(alpha_star, lifting_star)
 
         M = self.mass_matrix()
         K = self.stiffness_matrix(u_full_star)
@@ -450,7 +475,6 @@ class Galerkin:
         # Lifting-gradient forcing -dt * (K_full @ U_bar), i.e. the contribution
         # of int a(U+v) U_x phi_j'. Vanishes for symmetric BCs (U_x = 0) but is
         # required when u_B^- != u_B^+.
-        u_bar = 0.5 * (lifting_prev + lifting_next)
         f = f - self.dt * self._lifting_stiffness_vector(u_full_star, u_bar)
 
         rhs = B @ u_history[-1, :] + f

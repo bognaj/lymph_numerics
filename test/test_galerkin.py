@@ -30,8 +30,15 @@ class TestGalerkinExtrapolation(unittest.TestCase):
             first_state,
             first_state,
         ])
+        lifting_prev = np.full_like(xs, 0.1)
+        lifting_next = np.full_like(xs, 0.1)
 
-        result = galerkin.crank_nicolson_galerkin_step(n=1, u_history=u_history)
+        result = galerkin.crank_nicolson_galerkin_step(
+            n=1,
+            u_history=u_history,
+            lifting_prev=lifting_prev,
+            lifting_next=lifting_next,
+        )
 
         self.assertEqual(result.shape, u_history[0, :].shape)
         self.assertTrue(np.isfinite(result).all())

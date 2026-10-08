@@ -8,33 +8,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 from runge_kutta import RungeKutta
 from galerkin import Galerkin
+from config import C_shear, R_min
 
 
 if __name__ == "__main__":
     # initial values of chemical dynamics
-    C0 = 0.5
+    C0 = 0.1
     N0 = 0.5
     x0 = np.array([N0, C0])
 
     # time settings
     t0 = 0.0
-    dt = 0.01
-    t_final = 10.0
+    dt = 0.0001
+    t_final = 40
     current_time = t0 + dt # the first moment in time we need to find values for
     current_n = 1 # the first step we need to find the new values for
 
     # space settings
     xs = np.linspace(0, 1, 100)
 
-    # initial function
-    v = lambda x: 0.1 + 0.9 * np.sin(np.pi * x)
+    # Initial profile with endpoints matching the boundary state implied by C0.
+    initial_H = 1 - Galerkin.smooth_heaviside(C0, C_shear)
+    initial_boundary_u = 0.5 * initial_H**2
+    v = lambda x: initial_boundary_u + 0.05 * np.sin(np.pi * x)
 
     # initialize solvers
     rk = RungeKutta(x0=x0, t0=t0, dt=dt, 
                         t_final=t_final, xs=xs)
     
-    galerkin = Galerkin(xs=xs, N=len(xs), t0=t0, dt=dt, 
-                        t_final=t_final, initial_condition=v)
+    galerkin = Galerkin(xs=xs, N=len(xs), t0=t0, dt=dt,
+                        t_final=t_final, initial_condition=v,
+                        R_minus=R_min)
 
     # Store chemical substances concentrations
     N_values = np.zeros(int((t_final - t0) / dt) + 1)
@@ -79,13 +83,17 @@ if __name__ == "__main__":
         lifting_next = galerkin.get_lifting_function_values(bc_0, bc_1)
         lifting_function_values[current_n, :] = lifting_next
         lifting_prev = lifting_function_values[current_n - 1, :]
+        lifting_before_prev = None
+        if current_n >= 2:
+            lifting_before_prev = lifting_function_values[current_n - 2, :]
 
         # Galerkin step: advance interior alpha coefficients from n-1 to n
         alpha_new = galerkin.crank_nicolson_galerkin_step(
             n=current_n,
             u_history=galerkin.alpha_history[:current_n, :],
             lifting_prev=lifting_prev,
-            lifting_next=lifting_next
+            lifting_next=lifting_next,
+            lifting_before_prev=lifting_before_prev
         )
         galerkin.alpha_history[current_n, :] = alpha_new
 
