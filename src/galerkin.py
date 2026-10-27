@@ -136,21 +136,22 @@ class Galerkin:
         return u_full
 
     @staticmethod
-    def phi_prim(u_vector: np.array, gamma: float=20, lambda_: float=0.2, alpha: float=0.1, beta: float=0.04) -> np.array:
+    def phi_prim(u_vector: np.array, gamma: float=0.009048, lambda_: float=0.9954, 
+                     alpha: float=0.006803, beta: float=0.06675) -> np.array:
         """
         Compute the derivative of the phi function with respect to R.
 
         Args:
             u_vector (np.array): Vector of state variables
-            gamma (float, optional): gamma parameter. Defaults to 20.
-            lambda_ (float, optional): lambda parameter. Defaults to 0.5.
-            alpha (float, optional): alpha parameter. Defaults to 0.1.
-            beta (float, optional): beta parameter. Defaults to 0.04.
+            gamma (float, optional): gamma parameter. Defaults to 0.009048.
+            lambda_ (float, optional): lambda parameter. Defaults to 0.9954.
+            alpha (float, optional): alpha parameter. Defaults to 0.006803.
+            beta (float, optional): beta parameter. Defaults to 0.06675.
 
         Returns:
             np.array: Derivative of the phi function with respect to u
         """
-        return gamma/(1 - lambda_ * u_vector) - alpha * u_vector**(-3) + beta
+        return (gamma*lambda_)/(1 - lambda_ * u_vector)**2 + 3 * alpha * u_vector**(-4)
     
     def nonlinearity_a(self, u_vector: np.array, eta: float) -> np.array:
         """

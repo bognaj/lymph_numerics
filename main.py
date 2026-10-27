@@ -19,10 +19,8 @@ if __name__ == "__main__":
 
     # time settings
     t0 = 0.0
-    dt = 0.0001
+    dt = 0.001
     t_final = 40
-    current_time = t0 + dt # the first moment in time we need to find values for
-    current_n = 1 # the first step we need to find the new values for
 
     # space settings
     xs = np.linspace(0, 1, 100)
@@ -65,10 +63,10 @@ if __name__ == "__main__":
     # Initial alpha coefficients: v^0 = u^0 - U^0 at interior nodes
     galerkin.alpha_history[0, :] = u_values[0, 1:-1] - lifting_function_values[0, 1:-1]
 
-    while current_time <= t_final:
+    for current_n in range(1, len(N_values)):
         # Advance chemical concentrations from step n-1 to step n
         N_new, C_new = rk.single_step(
-            t=current_time - dt,
+            t=t0 + (current_n - 1) * dt,
             NC_s=np.array([N_values[current_n - 1], C_values[current_n - 1]]),
             R_vector=rk.u_to_r(u_values[current_n - 1, :])
         )
@@ -99,9 +97,6 @@ if __name__ == "__main__":
 
         # Reconstruct full solution: u = U + v_h
         u_values[current_n, :] = lifting_next + galerkin.get_u_from_alpha_coeffs(alpha_new)
-
-        current_time += dt
-        current_n += 1
 
     # ------------------------------------------------------------------
     # Post-processing: reconstruct the radius R = sqrt(2 u) and plot

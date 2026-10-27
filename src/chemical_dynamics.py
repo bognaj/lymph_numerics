@@ -5,7 +5,7 @@ def N_minus_dynamics(N):
     return -N
 
 def N_plus_dynamics(N, alpha, beta, gamma, zeta):
-    return N + zeta
+    return -N + zeta
 
 def N_dynamics(t, x, mode, alpha, beta, gamma, zeta):
     return N_minus_dynamics(x[0]) if mode == "minus" else N_plus_dynamics(x[0], alpha, beta, gamma, zeta)

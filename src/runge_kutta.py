@@ -124,6 +124,10 @@ class RungeKutta:
         """
         return np.multiply(R_vector, self.p_x(R_vector))/(2 * L)
 
+    def get_shear_magnitude(self, R_vector: np.array) -> np.array:
+        """Return the magnitude of the wall shear stress at each spatial point."""
+        return np.abs(self.get_shear_stress(R_vector))
+
     @staticmethod
     def get_alpha() -> float:
         """
@@ -182,7 +186,10 @@ class RungeKutta:
         alpha = self.get_alpha()
         beta = self.get_beta(self.mean_value_in_x(R_vector))
         gamma = self.get_gamma()
-        zeta = self.get_zeta(self.mean_value_in_x(self.get_shear_stress(R_vector)))
+        mean_shear_magnitude = self.mean_value_in_x(
+            self.get_shear_magnitude(R_vector)
+        )
+        zeta = self.get_zeta(mean_shear_magnitude)
 
 
         def event_surface(t, NC_s):
